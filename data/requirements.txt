@@ -1,0 +1,6 @@
+kagglehub
+llama-index
+weaviate-client
+llama-index-vector-stores-weaviate
+llama-index-embeddings-text-embeddings-inference
+pandas
