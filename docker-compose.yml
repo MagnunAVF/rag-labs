@@ -1,4 +1,60 @@
 services:
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:latest
+    ports:
+      - "8082:80"
+    volumes:
+      - ${HOME}/.cache/huggingface:/data
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    command:
+      - --model-id
+      - mixedbread-ai/mxbai-embed-large-v1
+      - --max-client-batch-size
+      - "16"
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    command:
+      - --model
+      - microsoft/Phi-3-mini-128k-instruct
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - "0.8"
+      - --trust-remote-code
+      - --max-model-len
+      - "16384"
+    shm_size: '2gb'
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:latest
     ports:
@@ -11,6 +67,42 @@ services:
       DEFAULT_VECTORIZER_MODULE: 'none'
       PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
       CLUSTER_HOSTNAME: 'node1'
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rag-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - WEAVIATE_HOST=weaviate:8080
+      - WEAVIATE_SCHEME=http
+      - TEI_BASE_URL=http://tei:80
+      - VLLM_BASE_URL=http://vllm:8000/v1
+      - VLLM_MODEL_NAME=microsoft/Phi-3-mini-128k-instruct
+      - COLLECTION_NAME=LlamaIndex
+      - SERVER_PORT=:8081
+    depends_on:
+      weaviate:
+        condition: service_healthy
+      tei:
+        condition: service_started
+      vllm:
+        condition: service_started
+    networks:
+      - rag-network
+    restart: unless-stopped
+
+networks:
+  rag-network:
+    driver: bridge
 
 volumes:
   weaviate_data:
